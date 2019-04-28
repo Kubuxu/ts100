@@ -864,7 +864,7 @@ void startGUITask(void const *argument __unused) {
 		OLED::setCursor(0, 0);
 		if (systemSettings.detailedIDLE) {
 			OLED::setFont(1);
-			if (tipTemp > 470) {
+			if (tipTemp > 470 && false) {
 				OLED::print(TipDisconnectedString);
 			} else {
 				OLED::print(IdleTipString);
@@ -1008,7 +1008,8 @@ void startPIDTask(void const *argument __unused) {
 				// basically: temp - lastTemp
 				//  Unfortunately, our temp signal is too noisy to really help.
 
-				setTipMilliWatts(milliWattsOut);
+				//setTipMilliWatts(milliWattsOut);
+				setTipMilliWatts(1000);
 			} else {
 
 #ifdef MODEL_TS80

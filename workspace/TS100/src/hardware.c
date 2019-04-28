@@ -38,16 +38,87 @@ uint16_t getHandleTemperature() {
 	result /= 993;
 	return result;
 }
+
+typedef uint16_t fx_t;
+
+#define FX_FRAC 7
+
+#define fx_float(a) (a / (float)(1<<FX_FRAC))
+#define fx_make(a)  ((fx_t)(a * (1<<FX_FRAC)))
+#define fx_add(a,b) (a + b)
+#define fx_sub(a,b) (a - b)
+#define fx_mul(a,b) ((fx_t)(((uint32_t)a * b) >> FX_FRAC))
+#define fx_div(a,b) ((fx_t)(((uint32_t)a << FX_FRAC) / b))
+
+
+fx_t fx_linter(fx_t ratio, fx_t y0, fx_t y1) {
+	return fx_add(y0, fx_mul(fx_sub(y1, y0), ratio));
+}
+
+// Lookup table for K type termocouple
+// Created using polygon interpolation
+// Source: http://www.ti.com/lit/an/sbaa189/sbaa189.pdf
+struct kLookup_t {
+	uint16_t s;
+	fx_t c;
+};
+
+
+#define AMP_GAIN (1.0+(750e3/2.37e3))
+#define ADC2mV (3.3*1000.0/8.0/4095.0)
+#define sp_make(x) ((uint16_t)(x/(ADC2mV/AMP_GAIN)+0.5))
+
+// Lookup table for K type termocouple
+// Created using polygon interpolation
+// Source: http://www.ti.com/lit/an/sbaa189/sbaa189.pdf
+static const struct kLookup_t kLookup[8] = {
+	{sp_make(0), fx_make(0)},
+	{sp_make(2.96), fx_make(72.61)},
+	{sp_make(5.90), fx_make(144.12)},
+	{sp_make(8.86), fx_make(217.99)},
+	{sp_make(11.80), fx_make(290.15)},
+	{sp_make(14.74), fx_make(350.64)},
+	{sp_make(17.70), fx_make(430.78)},
+	{sp_make(20.65), fx_make(500.00)},
+};
+#define kLookupLen (sizeof(kLookup)/sizeof(kLookup[0]))
+
+
 uint16_t tipMeasurementToC(uint16_t raw) {
 	//((Raw Tip-RawOffset) * calibrationgain) / 1000 = tip delta in CX10
 	// tip delta in CX10 + handleTemp in CX10 = tip absolute temp in CX10
 	// Div answer by 10 to get final result
 
-	uint32_t tipDelta = ((raw - CalibrationTempOffset) * tipGainCalValue)
+	//fx_t mV =
+	// raw * 3.3 * 1000 (mV/V) / 4095 / 8 / AMP_GAIN
+	//fx_t mV = fx_mul(fx_make(raw), fx_make(3.3 * 1000 / AMP_GAIN / 8));
+	//mV = fx_div(mV, fx_make(4095));
+	/*uint32_t tipDelta = ((raw - CalibrationTempOffset) * tipGainCalValue)
 			/ 1000;
 	tipDelta += getHandleTemperature();
+	*/
+	fx_t sample = fx_make(raw);
+	uint8_t i = 0;
+	for (; i < kLookupLen; i++) {
+		if (kLookup[i].s > sample) {
+			break;
+		}
+	}
+	if (i == 0) {
+		return 0;
+	}
 
-	return tipDelta / 10;
+	//fx_t c = kLookup[i-1].c;
+	//fx_t tmp = fx_sub(kLookup[i].c, kLookup[i-1].c);
+	//tmp = fx_mul(tmp, fx_div(fx_sub(sample, kLookup[i-1].s), fx_sub(kLookup[i].s, kLookup[i-1].s)));
+	//c = fx_add(c, tmp);
+	struct kLookup_t l0 = kLookup[i-1];
+	struct kLookup_t l1 = kLookup[i];
+	fx_t ratio = fx_div(fx_make(sample - l0.s), fx_make(l1.s - l0.s));
+	//fx_t ratio = fx_div(fx_sub(sample, l0.s), fx_sub(l1.s, l0.s));
+	fx_t c = fx_linter(ratio, l0.c, l1.c);
+
+	return fx_mul(c, fx_make(100)) >> FX_FRAC;
 }
 uint16_t ctoTipMeasurement(uint16_t temp) {
 	//[ (temp-handle/10) * 10000 ]/calibrationgain = tip raw delta
