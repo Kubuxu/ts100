@@ -111,15 +111,17 @@ enum TipType {
 #endif
 extern uint16_t tipGainCalValue ;
 
+uint16_t cToTempTarget(uint16_t c);
+uint16_t fToTempTarget(uint16_t f);
+
 uint16_t lookupTipDefaultCalValue(enum TipType tipID);
  uint16_t getHandleTemperature();
 uint16_t getTipRawTemp(uint8_t refresh);
 uint16_t getInputVoltageX10(uint16_t divisor,uint8_t sample);
 
 void setTipPWM(uint8_t pulse);
-uint16_t ctoTipMeasurement(uint16_t temp);
+uint16_t tipMeasurementFX97(uint16_t raw);
 uint16_t tipMeasurementToC(uint16_t raw);
-uint16_t ftoTipMeasurement(uint16_t temp);
 uint16_t tipMeasurementToF(uint16_t raw);
 void seekQC(int16_t Vx10, uint16_t divisor);
 void setCalibrationOffset(int16_t offSet);

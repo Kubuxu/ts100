@@ -39,104 +39,152 @@ uint16_t getHandleTemperature() {
 	return result;
 }
 
-typedef uint16_t fx_t;
+// fx16.16 fixed point type, used for calculations
+typedef uint32_t fx_t;
 
-#define FX_FRAC 7
+#define FX_FRAC 16
 
 #define fx_float(a) (a / (float)(1<<FX_FRAC))
 #define fx_make(a)  ((fx_t)(a * (1<<FX_FRAC)))
 #define fx_add(a,b) (a + b)
 #define fx_sub(a,b) (a - b)
-#define fx_mul(a,b) ((fx_t)(((uint32_t)a * b) >> FX_FRAC))
-#define fx_div(a,b) ((fx_t)(((uint32_t)a << FX_FRAC) / b))
+#define fx_mul(a,b) ((fx_t)(((uint64_t)a * b) >> FX_FRAC))
+// no division because uint64_t division is problematic (routine takes about 400 bytes)
+//#define fx_div(a,b) ((fx_t)(((uint64_t)a << FX_FRAC) / b))
 
 
-fx_t fx_linter(fx_t ratio, fx_t y0, fx_t y1) {
+static fx_t fx_linter(fx_t ratio, fx_t y0, fx_t y1) {
 	return fx_add(y0, fx_mul(fx_sub(y1, y0), ratio));
 }
 
-// Lookup table for K type termocouple
+// Lookup table for N type termocouple
 // Created using polygon interpolation
-// Source: http://www.ti.com/lit/an/sbaa189/sbaa189.pdf
-struct kLookup_t {
-	uint16_t s;
-	fx_t c;
+// Source:
+// Result is obtained by interpolating between two lookup entries
+struct nLookup_t {
+	uint16_t s;	// raw sample data
+	uint16_t c;	// temperature in fx9.6 fixed point format
 };
-
 
 #define AMP_GAIN (1.0+(750e3/2.37e3))
 #define ADC2mV (3.3*1000.0/8.0/4095.0)
+// converts mV to sample data
 #define sp_make(x) ((uint16_t)(x/(ADC2mV/AMP_GAIN)+0.5))
 
-// Lookup table for K type termocouple
-// Created using polygon interpolation
-// Source: http://www.ti.com/lit/an/sbaa189/sbaa189.pdf
-static const struct kLookup_t kLookup[8] = {
-	{sp_make(0), fx_make(0)},
-	{sp_make(2.96), fx_make(72.61)},
-	{sp_make(5.90), fx_make(144.12)},
-	{sp_make(8.86), fx_make(217.99)},
-	{sp_make(11.80), fx_make(290.15)},
-	{sp_make(14.74), fx_make(350.64)},
-	{sp_make(17.70), fx_make(430.78)},
-	{sp_make(20.65), fx_make(500.00)},
+#define FX97_FRAC 7
+// converts floats to fx9.7
+#define fx97_make(a) ((uint16_t)(a * (1<<FX97_FRAC)))
+// converts fx9.7 to fx_t
+#define fx97_to_fx(x) (((fx_t)x)<<(FX_FRAC-FX97_FRAC))
+
+static const struct nLookup_t nLookup[8] = {
+	{sp_make(0.000000), fx97_make(0.000000)},
+	{sp_make(1.632445), fx97_make(60.973165)},
+	{sp_make(3.225425), fx97_make(115.337541)},
+	{sp_make(5.013433), fx97_make(172.687182)},
+	{sp_make(7.066727), fx97_make(234.731031)},
+	{sp_make(9.476449), fx97_make(304.057276)},
+	{sp_make(12.297174), fx97_make(381.951755)},
+	{sp_make(15.600000), fx97_make(470.108006)}
 };
-#define kLookupLen (sizeof(kLookup)/sizeof(kLookup[0]))
+
+#define nLookupLen (sizeof(nLookup)/sizeof(nLookup[0]))
 
 
-uint16_t tipMeasurementToC(uint16_t raw) {
-	//((Raw Tip-RawOffset) * calibrationgain) / 1000 = tip delta in CX10
-	// tip delta in CX10 + handleTemp in CX10 = tip absolute temp in CX10
-	// Div answer by 10 to get final result
-
-	//fx_t mV =
-	// raw * 3.3 * 1000 (mV/V) / 4095 / 8 / AMP_GAIN
-	//fx_t mV = fx_mul(fx_make(raw), fx_make(3.3 * 1000 / AMP_GAIN / 8));
-	//mV = fx_div(mV, fx_make(4095));
-	/*uint32_t tipDelta = ((raw - CalibrationTempOffset) * tipGainCalValue)
-			/ 1000;
-	tipDelta += getHandleTemperature();
-	*/
-	fx_t sample = fx_make(raw);
+uint16_t inverseLookup(uint16_t fx97) {
 	uint8_t i = 0;
-	for (; i < kLookupLen; i++) {
-		if (kLookup[i].s > sample) {
+	for (; i < nLookupLen-1; i++) {
+		if (nLookup[i].c > fx97) {
 			break;
 		}
 	}
-	if (i == 0) {
-		return 0;
-	}
 
-	//fx_t c = kLookup[i-1].c;
-	//fx_t tmp = fx_sub(kLookup[i].c, kLookup[i-1].c);
-	//tmp = fx_mul(tmp, fx_div(fx_sub(sample, kLookup[i-1].s), fx_sub(kLookup[i].s, kLookup[i-1].s)));
-	//c = fx_add(c, tmp);
-	struct kLookup_t l0 = kLookup[i-1];
-	struct kLookup_t l1 = kLookup[i];
-	fx_t ratio = fx_div(fx_make(sample - l0.s), fx_make(l1.s - l0.s));
-	//fx_t ratio = fx_div(fx_sub(sample, l0.s), fx_sub(l1.s, l0.s));
-	fx_t c = fx_linter(ratio, l0.c, l1.c);
+	struct nLookup_t l0 = nLookup[i-1];
+	struct nLookup_t l1 = nLookup[i];
 
-	return fx_mul(c, fx_make(100)) >> FX_FRAC;
+	uint16_t a = fx97 - l0.c;
+	uint16_t b = l1.c - l0.c;
+
+	fx_t ratio = (fx_t) (((uint32_t)a) << FX97_FRAC) / b;
+	return fx_linter(ratio, fx_make(l0.s), fx_make(l1.s)) >> FX_FRAC;
 }
-uint16_t ctoTipMeasurement(uint16_t temp) {
+
+uint16_t getHandleOffset()  {
+	uint16_t handleTemp = getHandleTemperature();
+	fx_t fxHandleTemp = fx_mul(fx_make(handleTemp), fx_make(0.1));
+
+	uint16_t fx97HandleTemp = fxHandleTemp >> (FX_FRAC - FX97_FRAC);
+
+	return inverseLookup(fx97HandleTemp);
+}
+
+
+uint16_t tipMeasurementToC(uint16_t raw) {
+	return tipMeasurementFX97(raw) >> FX97_FRAC;
+}
+
+uint16_t tipMeasurementFX97(uint16_t raw) {
+	// ColdJunctionOffset = LUT-1(handleTemp)
+	// LUT(Raw Tip - RawOffset + ColdJunctionOffset) = TipTemp in fx16.16
+	// return TipTemp >> FX_FRAC
+
+	// unit: Cx10
+	uint16_t handleOffset = getHandleOffset();
+
+	uint32_t raw32 = raw;
+	raw32 += handleOffset;
+	raw32 -= CalibrationTempOffset;
+	uint16_t sample = raw32;
+
+	uint8_t i = 0;
+	// nLookupLen-1 because we want to use last entry if we are over it
+	for (; i < nLookupLen-1; i++) {
+		if (nLookup[i].s > raw) {
+			break;
+		}
+	}
+	// i can't be 0
+
+	struct nLookup_t l0 = nLookup[i-1];
+	struct nLookup_t l1 = nLookup[i];
+
+	uint16_t a = raw - l0.s; // fx16.0
+	uint16_t b = l1.s - l0.s; // fx16.0
+
+	// we can divide a and b in a uint32_t becuse they are fx16.0
+	// result is fx16.16 which is fx_t
+	fx_t ratio = (fx_t) (((uint32_t)a) << FX_FRAC) / b;
+	fx_t c = fx_linter(ratio, fx97_to_fx(l0.c), fx97_to_fx(l1.c));
+
+	return c >> (FX_FRAC - FX97_FRAC);
+}
+/*uint16_t ctoTipMeasurement(uint16_t temp) {
 	//[ (temp-handle/10) * 10000 ]/calibrationgain = tip raw delta
 	// tip raw delta + tip offset = tip ADC reading
-	int32_t TipRaw = ((temp - (getHandleTemperature() / 10)) * 10000)
-			/ tipGainCalValue;
+	uint16_t handleOffset = getHandleOffset();
+	uint16_t TipRaw = inverseLookup(temp << 7);
 	TipRaw += CalibrationTempOffset;
+	TipRaw -= handleOffset;
 	return TipRaw;
+}
+*/
+
+uint16_t cToTempTarget(uint16_t c) {
+	return c << FX97_FRAC;
+}
+uint16_t fToTempTarget(uint16_t f) {
+	return cToTempTarget(((f - 32) * 5) / 9);
 }
 
 uint16_t tipMeasurementToF(uint16_t raw) {
 	// Convert result from C to F
 	return (tipMeasurementToC(raw) * 9) / 5 + 32;
 }
-uint16_t ftoTipMeasurement(uint16_t temp) {
+/*uint16_t ftoTipMeasurement(uint16_t temp) {
 	// Convert the temp back to C from F
 	return ctoTipMeasurement(((temp - 32) * 5) / 9);
 }
+*/
 
 uint16_t getTipInstantTemperature() {
 	uint16_t sum;

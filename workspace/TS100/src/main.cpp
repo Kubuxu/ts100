@@ -15,7 +15,7 @@
 #define ACCELDEBUG 0
 uint8_t PCBVersion = 0;
 // File local variables
-uint32_t currentlyActiveTemperatureTarget = 0;
+uint16_t tempTarget = 0;
 uint32_t lastMovementTime = 0;
 uint32_t lastButtonTime = 0;
 int16_t idealQCVoltage = 0;
@@ -256,7 +256,7 @@ static bool checkVoltageForExit() {
 			}
 
 			OLED::refresh();
-			currentlyActiveTemperatureTarget = 0;
+			tempTarget = 0;
 			waitForButtonPress();
 			return true;
 		}
@@ -305,7 +305,7 @@ static void gui_drawBatteryIcon() {
 }
 static void gui_solderingTempAdjust() {
 	uint32_t lastChange = xTaskGetTickCount();
-	currentlyActiveTemperatureTarget = 0;
+	tempTarget = 0;
 	uint32_t autoRepeatTimer = 0;
 	uint8_t autoRepeatAcceleration = 0;
 	for (;;) {
@@ -419,11 +419,11 @@ static int gui_SolderingSleepingMode() {
 			return 1; // return non-zero on error
 #endif
 		if (systemSettings.temperatureInF) {
-			currentlyActiveTemperatureTarget = ftoTipMeasurement(
+			tempTarget = fToTempTarget(
 					min(systemSettings.SleepTemp,
 							systemSettings.SolderingTemp));
 		} else {
-			currentlyActiveTemperatureTarget = ctoTipMeasurement(
+			tempTarget = cToTempTarget(
 					min(systemSettings.SleepTemp,
 							systemSettings.SolderingTemp));
 		}
@@ -464,7 +464,7 @@ static int gui_SolderingSleepingMode() {
 				if (((uint32_t) (xTaskGetTickCount() - lastMovementTime))
 						> (uint32_t) (systemSettings.ShutdownTime * 60 * 100)) {
 					// shutdown
-					currentlyActiveTemperatureTarget = 0;
+					tempTarget = 0;
 					return 1;  // we want to exit soldering mode
 				}
 		OLED::refresh();
@@ -622,9 +622,9 @@ static void gui_solderingMode(uint8_t jumpToSleep) {
 		if (badTipCounter > 128) {
 			OLED::print(BadTipString);
 			OLED::refresh();
-			currentlyActiveTemperatureTarget = 0;
+			tempTarget = 0;
 			waitForButtonPress();
-			currentlyActiveTemperatureTarget = 0;
+			tempTarget = 0;
 			return;
 		}
 		OLED::refresh();
@@ -632,18 +632,18 @@ static void gui_solderingMode(uint8_t jumpToSleep) {
 		// Update the setpoints for the temperature
 		if (boostModeOn) {
 			if (systemSettings.temperatureInF)
-				currentlyActiveTemperatureTarget = ftoTipMeasurement(
+				tempTarget = fToTempTarget(
 						systemSettings.BoostTemp);
 			else
-				currentlyActiveTemperatureTarget = ctoTipMeasurement(
+				tempTarget = cToTempTarget(
 						systemSettings.BoostTemp);
 
 		} else {
 			if (systemSettings.temperatureInF)
-				currentlyActiveTemperatureTarget = ftoTipMeasurement(
+				tempTarget = fToTempTarget(
 						systemSettings.SolderingTemp);
 			else
-				currentlyActiveTemperatureTarget = ctoTipMeasurement(
+				tempTarget = cToTempTarget(
 						systemSettings.SolderingTemp);
 		}
 
@@ -843,7 +843,7 @@ void startGUITask(void const *argument __unused) {
 			break;
 		}
 
-		currentlyActiveTemperatureTarget = 0;  // ensure tip is off
+		tempTarget = 0;  // ensure tip is off
 		getInputVoltageX10(systemSettings.voltageDiv, 0);
 		uint16_t tipTemp = tipMeasurementToC(getTipRawTemp(0));
 
@@ -934,7 +934,6 @@ void startPIDTask(void const *argument __unused) {
 #ifdef MODEL_TS80
 			idealQCVoltage = calculateMaxVoltage(systemSettings.cutoutSetting);
 #endif
-	uint8_t rawC = ctoTipMeasurement(101) - ctoTipMeasurement(100); // 1*C change in raw.
 
 #ifdef MODEL_TS80
 			//Set power management code to the tip resistance in ohms * 10
@@ -945,7 +944,7 @@ void startPIDTask(void const *argument __unused) {
 
 #endif
 	history<int32_t> tempError = { { 0 }, 0, 0 };
-	currentlyActiveTemperatureTarget = 0; // Force start with no output (off). If in sleep / soldering this will
+	tempTarget = 0; // Force start with no output (off). If in sleep / soldering this will
 										  // be over-ridden rapidly
 	pidTaskNotification = xTaskGetCurrentTaskHandle();
 	for (;;) {
@@ -953,63 +952,22 @@ void startPIDTask(void const *argument __unused) {
 		if (ulTaskNotifyTake(pdTRUE, 2000)) {
 			// This is a call to block this thread until the ADC does its samples
 			uint16_t rawTemp = getTipRawTemp(1);  // get instantaneous reading
-			if (currentlyActiveTemperatureTarget) {
+			uint16_t temp = tipMeasurementFX97(rawTemp);
+			if (tempTarget) {
 				// Cap the max set point to 450C
-				if (currentlyActiveTemperatureTarget > ctoTipMeasurement(450)) {
+				if (tempTarget > cToTempTarget(450)) {
 					//Maximum allowed output
-					currentlyActiveTemperatureTarget = ctoTipMeasurement(450);
-				} else if (currentlyActiveTemperatureTarget > 32400) {
-					//Cap to max adc reading
-					currentlyActiveTemperatureTarget = 32400;
+					tempTarget = cToTempTarget(450);
 				}
 
 				// As we get close to our target, temp noise causes the system
 				//  to be unstable. Use a rolling average to dampen it.
 				// We overshoot by roughly 1/2 of 1 degree Fahrenheit.
 				//  This helps stabilize the display.
-				int32_t tError = currentlyActiveTemperatureTarget - rawTemp
-						+ (rawC / 4);
-				tError = tError > INT16_MAX ? INT16_MAX : tError;
-				tError = tError < INT16_MIN ? INT16_MIN : tError;
-				tempError.update(tError);
+				int32_t tError = ((int32_t) tempTarget) - temp;
+				int32_t milliWattsOut = tError;
 
-				// Now for the PID!
-				int32_t milliWattsOut = 0;
-
-				// P term - total power needed to hit target temp next cycle.
-				// thermal mass = 1690 milliJ/*C for my tip.
-				//  = Watts*Seconds to raise Temp from room temp to +100*C, divided by 100*C.
-				// we divide milliWattsNeeded by 20 to let the I term dominate near the set point.
-				//  This is necessary because of the temp noise and thermal lag in the system.
-				// Once we have feed-forward temp estimation we should be able to better tune this.
-
-#ifdef MODEL_TS100
-				const uint16_t mass = 2020 / 20; // divide here so division is compile-time.
-#endif
-#ifdef MODEL_TS80
-				const uint16_t mass = 2020 / 50;
-#endif
-
-				int32_t milliWattsNeeded = tempToMilliWatts(tempError.average(),
-						mass, rawC);
-				// note that milliWattsNeeded is sometimes negative, this counters overshoot
-				//  from I term's inertia.
-				milliWattsOut += milliWattsNeeded;
-
-				// I term - energy needed to compensate for heat loss.
-				// We track energy put into the system over some window.
-				// Assuming the temp is stable, energy in = energy transfered.
-				//  (If it isn't, P will dominate).
-				milliWattsOut += milliWattHistory.average();
-
-				// D term - use sudden temp change to counter fast cooling/heating.
-				//  In practice, this provides an early boost if temp is dropping
-				//  and counters extra power if the iron is no longer losing temp.
-				// basically: temp - lastTemp
-				//  Unfortunately, our temp signal is too noisy to really help.
-
-				//setTipMilliWatts(milliWattsOut);
-				setTipMilliWatts(1000);
+				setTipMilliWatts(milliWattsOut);
 			} else {
 
 #ifdef MODEL_TS80

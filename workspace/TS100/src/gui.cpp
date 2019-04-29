@@ -663,11 +663,12 @@ static void setTipOffset() {
 		osDelay(100);
 	}
 	systemSettings.CalibrationOffset = offset / 15;
-	// Need to remove from this the ambient temperature offset
+	/*// Need to remove from this the ambient temperature offset
 	uint32_t ambientoffset = getHandleTemperature(); // Handle temp in C x10
 	ambientoffset *= 100;
 	ambientoffset /= tipGainCalValue;
 	systemSettings.CalibrationOffset -= ambientoffset;
+	*/
 	setCalibrationOffset(systemSettings.CalibrationOffset);  // store the error
 	OLED::clearScreen();
 	OLED::setCursor(0, 0);
@@ -742,7 +743,7 @@ static void calibration_enterAdvancedCal(void) {
 		while (exit == false) {
 			//Set tip to 350C
 			setTipType(Tip_Custom, systemSettings.customTipGain);
-			currentlyActiveTemperatureTarget = ctoTipMeasurement(350);
+			tempTarget = cToTempTarget(350);
 			//Check if user has pressed button to change the gain
 			ButtonState buttons = getButtonState();
 			switch (buttons) {
