@@ -19,7 +19,7 @@ void setupPower(uint8_t res) {
 	tipResistance = res;
 }
 
-int32_t tempToMilliWatts(int32_t rawTemp, uint16_t mass, uint8_t rawC) {
+int32_t tempToMilliWatts(int32_t rawTemp, uint16_t mass, uint16_t rawC) {
 	// mass is in milliJ/*C, rawC is raw per degree C
 	// returns milliWatts needed to raise/lower a mass by rawTemp
 	//  degrees in one cycle.

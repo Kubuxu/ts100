@@ -959,13 +959,21 @@ void startPIDTask(void const *argument __unused) {
 					//Maximum allowed output
 					tempTarget = cToTempTarget(450);
 				}
+#ifdef MODEL_TS100
+				const uint16_t mass = 2020 / 20; // divide here so division is compile-time.
+#endif
+#ifdef MODEL_TS80
+				const uint16_t mass = 2020 / 50;
+#endif
 
 				// As we get close to our target, temp noise causes the system
 				//  to be unstable. Use a rolling average to dampen it.
 				// We overshoot by roughly 1/2 of 1 degree Fahrenheit.
 				//  This helps stabilize the display.
 				int32_t tError = ((int32_t) tempTarget) - temp;
-				int32_t milliWattsOut = tError;
+				tempError.update(tError);
+				int32_t milliWattsOut = tempToMilliWatts(tempError.average(), mass, cToTempTarget(1));
+				milliWattsOut += milliWattHistory.average();
 
 				setTipMilliWatts(milliWattsOut);
 			} else {

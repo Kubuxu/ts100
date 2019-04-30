@@ -67,9 +67,9 @@ struct nLookup_t {
 };
 
 #define AMP_GAIN (1.0+(750e3/2.37e3))
-#define ADC2mV (3.3*1000.0/8.0/4095.0)
+#define ADC2mV (3.3*1000.0/4.0/4095.0)
 // converts mV to sample data
-#define sp_make(x) ((uint16_t)(x/(ADC2mV/AMP_GAIN)+0.5))
+#define sp_make(x) ((uint16_t)(x*AMP_GAIN/ADC2mV))
 
 #define FX97_FRAC 7
 // converts floats to fx9.7
@@ -78,6 +78,8 @@ struct nLookup_t {
 #define fx97_to_fx(x) (((fx_t)x)<<(FX_FRAC-FX97_FRAC))
 
 static const struct nLookup_t nLookup[8] = {
+	// nType
+	/*
 	{sp_make(0.000000), fx97_make(0.000000)},
 	{sp_make(1.632445), fx97_make(60.973165)},
 	{sp_make(3.225425), fx97_make(115.337541)},
@@ -86,6 +88,50 @@ static const struct nLookup_t nLookup[8] = {
 	{sp_make(9.476449), fx97_make(304.057276)},
 	{sp_make(12.297174), fx97_make(381.951755)},
 	{sp_make(15.600000), fx97_make(470.108006)}
+	*/
+	// c type
+	/*
+	{sp_make(0.000000), fx97_make(0.000000)},
+	{sp_make(0.765148), fx97_make(55.013861)},
+	{sp_make(1.539694), fx97_make(105.913302)},
+	{sp_make(2.442240), fx97_make(161.918284)},
+	{sp_make(3.493425), fx97_make(223.613730)},
+	{sp_make(4.727829), fx97_make(292.784099)},
+	{sp_make(6.206138), fx97_make(372.478125)},
+	{sp_make(8.074175), fx97_make(470.192003)},
+	*/
+	// kType
+
+       {sp_make(0), fx97_make(0)},
+       {sp_make(2.96), fx97_make(72.61)},
+       {sp_make(5.90), fx97_make(144.12)},
+       {sp_make(8.86), fx97_make(217.99)},
+       {sp_make(11.80), fx97_make(290.15)},
+       {sp_make(14.74), fx97_make(350.64)},
+       {sp_make(17.70), fx97_make(430.78)},
+	   {sp_make(20.65), fx97_make(500.00)},
+
+	// gType
+	/*{sp_make(0.000000), fx97_make(0.000000)},
+	{sp_make(0.056435), fx97_make(31.810780)},
+	{sp_make(0.214438), fx97_make(77.192567)},
+	{sp_make(0.519326), fx97_make(133.478068)},
+	{sp_make(1.026422), fx97_make(200.407976)},
+	{sp_make(1.793533), fx97_make(278.309952)},
+	{sp_make(2.884027), fx97_make(368.035289)},
+	{sp_make(4.372252), fx97_make(471.270671)},
+	*/
+	//type d
+	/*
+	{sp_make(0.000000), fx97_make(0.000000)},
+	{sp_make(0.465523), fx97_make(45.305463)},
+	{sp_make(1.076232), fx97_make(95.264459)},
+	{sp_make(1.853910), fx97_make(151.481287)},
+	{sp_make(2.828534), fx97_make(214.669703)},
+	{sp_make(4.041981), fx97_make(286.612233)},
+	{sp_make(5.555256), fx97_make(370.002711)},
+	{sp_make(7.484334), fx97_make(470.389025)},
+	*/
 };
 
 #define nLookupLen (sizeof(nLookup)/sizeof(nLookup[0]))
@@ -105,7 +151,7 @@ uint16_t inverseLookup(uint16_t fx97) {
 	uint16_t a = fx97 - l0.c;
 	uint16_t b = l1.c - l0.c;
 
-	fx_t ratio = (fx_t) (((uint32_t)a) << FX97_FRAC) / b;
+	fx_t ratio = (fx_t) (((uint32_t)a) << FX_FRAC) / b;
 	return fx_linter(ratio, fx_make(l0.s), fx_make(l1.s)) >> FX_FRAC;
 }
 
@@ -128,7 +174,18 @@ uint16_t tipMeasurementFX97(uint16_t raw) {
 	// LUT(Raw Tip - RawOffset + ColdJunctionOffset) = TipTemp in fx16.16
 	// return TipTemp >> FX_FRAC
 
-	// unit: Cx10
+	/*uint16_t s = raw - CalibrationTempOffset;
+	if (s > raw) {
+		s= 0;
+	}
+
+	fx_t mV = fx_mul(fx_make(s), fx_make(1/(AMP_GAIN/ADC2mV)*100));
+	return mV >> (FX_FRAC - FX97_FRAC);
+	*/
+
+
+
+
 	uint16_t handleOffset = getHandleOffset();
 
 	uint32_t raw32 = raw;
@@ -136,10 +193,13 @@ uint16_t tipMeasurementFX97(uint16_t raw) {
 	raw32 -= CalibrationTempOffset;
 	uint16_t sample = raw32;
 
+	//fx_t mV = fx_mul(fx_make(handleOffset), fx_make(1/(AMP_GAIN/ADC2mV)*100));
+	//return mV >> (FX_FRAC - FX97_FRAC);
+
 	uint8_t i = 0;
 	// nLookupLen-1 because we want to use last entry if we are over it
 	for (; i < nLookupLen-1; i++) {
-		if (nLookup[i].s > raw) {
+		if (nLookup[i].s > sample) {
 			break;
 		}
 	}
@@ -148,7 +208,7 @@ uint16_t tipMeasurementFX97(uint16_t raw) {
 	struct nLookup_t l0 = nLookup[i-1];
 	struct nLookup_t l1 = nLookup[i];
 
-	uint16_t a = raw - l0.s; // fx16.0
+	uint16_t a = sample - l0.s; // fx16.0
 	uint16_t b = l1.s - l0.s; // fx16.0
 
 	// we can divide a and b in a uint32_t becuse they are fx16.0
